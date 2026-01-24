@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ionos-dyndns
+  namespace: ionos-ddns
+  labels:
+    app: ionos-dyndns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ionos-dyndns
+  template:
+    metadata:
+      labels:
+        app: ionos-dyndns
+    spec:
+      containers:
+      - name: dyndns
+        image: ghcr.io/a-belhadj/ionos-ddns:latest
+        imagePullPolicy: Always
+        envFrom:
+        - secretRef:
+            name: ionos-dyndns-secret
+        - configMapRef:
+            name: ionos-dyndns-config
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "10m"
+          limits:
+            memory: "32Mi"
+            cpu: "50m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      restartPolicy: Always

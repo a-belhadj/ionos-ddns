@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ionos-dyndns-config
+  namespace: ionos-ddns
+data:
+  UPDATE_INTERVAL_SECONDS: "60"
+  LOG_LEVEL: "INFO"
