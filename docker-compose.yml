@@ -1,0 +1,12 @@
+services:
+  dyndns:
+    image: ghcr.io/a-belhadj/ionos-ddns:latest
+    container_name: ionos-dyndns
+    restart: unless-stopped
+    environment:
+      - IONOS_API_KEY=${IONOS_API_KEY}
+      - IONOS_DOMAINS=${IONOS_DOMAINS}
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS}
+      - LOG_LEVEL=${LOG_LEVEL}
+    env_file:
+      - .env
