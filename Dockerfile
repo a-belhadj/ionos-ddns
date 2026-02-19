@@ -12,7 +12,7 @@ FROM scratch
 
 LABEL org.opencontainers.image.source="https://github.com/a-belhadj/ionos-ddns"
 LABEL org.opencontainers.image.description="Dynamic DNS updater for IONOS domains"
-LABEL org.opencontainers.image.licenses="GPL-3.0"
+LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /build/dyndns /dyndns
