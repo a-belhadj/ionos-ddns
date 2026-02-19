@@ -57,7 +57,7 @@ func TestUpdateDNSSuccess(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"status":"ok"}`)
+		_, _ = fmt.Fprint(w, `{"status":"ok"}`)
 	}))
 	defer server.Close()
 
@@ -76,7 +76,7 @@ func TestUpdateDNSSuccess(t *testing.T) {
 func TestUpdateDNSAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":"unauthorized"}`)
+		_, _ = fmt.Fprint(w, `{"error":"unauthorized"}`)
 	}))
 	defer server.Close()
 

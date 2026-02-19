@@ -61,7 +61,7 @@ func updateDNSWithURL(config Config, apiURL string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read and display the response
 	body, err := io.ReadAll(resp.Body)
