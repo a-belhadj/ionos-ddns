@@ -7,9 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -82,68 +79,15 @@ func updateDNSWithURL(config Config, apiURL string) error {
 }
 
 func main() {
-	// Configure slog based on LOG_LEVEL environment variable
-	logLevel := slog.LevelInfo
-	if level := os.Getenv("LOG_LEVEL"); level != "" {
-		switch strings.ToUpper(level) {
-		case "DEBUG":
-			logLevel = slog.LevelDebug
-		case "INFO":
-			logLevel = slog.LevelInfo
-		case "WARN":
-			logLevel = slog.LevelWarn
-		case "ERROR":
-			logLevel = slog.LevelError
-		}
-	}
-
-	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
-	})
-	slog.SetDefault(slog.New(handler))
-
+	logLevel := setupLogger()
 	slog.Info("IONOS DynDNS starting", "log_level", logLevel.String())
 
-	// Read interval (default: 300 seconds = 5 minutes)
-	interval := 300
-	if envInterval := os.Getenv("UPDATE_INTERVAL_SECONDS"); envInterval != "" {
-		if parsed, err := strconv.Atoi(envInterval); err == nil {
-			interval = parsed
-		}
-	}
+	config := loadConfig()
 
-	// Read heartbeat interval (default: 21600 seconds = 6 hours)
-	heartbeatSecs := 21600
-	if envHeartbeat := os.Getenv("HEARTBEAT_INTERVAL_SECONDS"); envHeartbeat != "" {
-		if parsed, err := strconv.Atoi(envHeartbeat); err == nil {
-			heartbeatSecs = parsed
-		}
-	}
-
-	// Read health port (default: 8080)
-	healthPort := 8080
-	if envPort := os.Getenv("HEALTH_PORT"); envPort != "" {
-		if parsed, err := strconv.Atoi(envPort); err == nil {
-			healthPort = parsed
-		}
-	}
-
-	// Load config from environment
-	config := Config{
-		APIKey:            os.Getenv("IONOS_API_KEY"),
-		Domains:           strings.Split(os.Getenv("IONOS_DOMAINS"), ","),
-		UpdateInterval:    interval,
-		HeartbeatInterval: heartbeatSecs,
-		HealthPort:        healthPort,
-	}
-
-	// Check that API key is present
 	if config.APIKey == "" {
 		slog.Error("IONOS_API_KEY not defined")
 		return
 	}
-
-	// Check that we have at least one domain
 	if len(config.Domains) == 0 || config.Domains[0] == "" {
 		slog.Error("IONOS_DOMAINS not defined")
 		return
@@ -151,9 +95,9 @@ func main() {
 
 	slog.Info("Configuration loaded",
 		"domains", config.Domains,
-		"update_interval_seconds", interval,
-		"heartbeat_interval_seconds", heartbeatSecs,
-		"health_port", healthPort,
+		"update_interval_seconds", config.UpdateInterval,
+		"heartbeat_interval_seconds", config.HeartbeatInterval,
+		"health_port", config.HealthPort,
 	)
 
 	// Start health check server
