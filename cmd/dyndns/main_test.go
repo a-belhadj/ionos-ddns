@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -56,7 +57,7 @@ func TestUpdateDNSSuccess(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		fmt.Fprint(w, `{"status":"ok"}`)
 	}))
 	defer server.Close()
 
@@ -75,7 +76,7 @@ func TestUpdateDNSSuccess(t *testing.T) {
 func TestUpdateDNSAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"unauthorized"}`))
+		fmt.Fprint(w, `{"error":"unauthorized"}`)
 	}))
 	defer server.Close()
 
