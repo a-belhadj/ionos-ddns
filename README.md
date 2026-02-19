@@ -10,6 +10,18 @@ Automatically update your IONOS DNS records with your current public IP address.
 
 The service periodically sends POST requests to `https://api.hosting.ionos.com/dns/v1/dyndns` to update your domain records. See the [IONOS DynDNS API documentation](https://developer.hosting.ionos.com/docs/dns) for details.
 
+## How it works
+
+```mermaid
+graph LR
+    A[ionos-ddns] -->|POST /dns/v1/dyndns| B[IONOS API]
+    B -->|Updates DNS records| C[DNS]
+    D[Ticker] -->|Every N seconds| A
+    A -->|Heartbeat log| E[stdout]
+```
+
+The service runs as a lightweight container and periodically calls the IONOS DynDNS API to keep your DNS records pointing to your current public IP. It uses structured logging with configurable verbosity and a heartbeat mechanism to confirm the service is running without flooding the logs.
+
 ## Quick Start
 
 ```bash
