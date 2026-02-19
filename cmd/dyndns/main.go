@@ -70,7 +70,7 @@ func updateDNS(config Config) error {
 		return fmt.Errorf("IONOS API error: status %d", resp.StatusCode)
 	}
 
-	slog.Info("DNS updated successfully", "domains", config.Domains, "status", resp.StatusCode)
+	slog.Debug("DNS updated successfully", "domains", config.Domains, "status", resp.StatusCode)
 
 	return nil
 }
@@ -106,11 +106,20 @@ func main() {
 		}
 	}
 
+	// Read heartbeat interval (default: 21600 seconds = 6 hours)
+	heartbeatSecs := 21600
+	if envHeartbeat := os.Getenv("HEARTBEAT_INTERVAL_SECONDS"); envHeartbeat != "" {
+		if parsed, err := strconv.Atoi(envHeartbeat); err == nil {
+			heartbeatSecs = parsed
+		}
+	}
+
 	// Load config from environment
 	config := Config{
-		APIKey:         os.Getenv("IONOS_API_KEY"),
-		Domains:        strings.Split(os.Getenv("IONOS_DOMAINS"), ","),
-		UpdateInterval: interval,
+		APIKey:            os.Getenv("IONOS_API_KEY"),
+		Domains:           strings.Split(os.Getenv("IONOS_DOMAINS"), ","),
+		UpdateInterval:    interval,
+		HeartbeatInterval: heartbeatSecs,
 	}
 
 	// Check that API key is present
@@ -128,6 +137,7 @@ func main() {
 	slog.Info("Configuration loaded",
 		"domains", config.Domains,
 		"update_interval_seconds", interval,
+		"heartbeat_interval_seconds", heartbeatSecs,
 	)
 
 	// First immediate update
@@ -135,11 +145,24 @@ func main() {
 		slog.Error("DNS update failed", "error", err)
 	}
 
+	// Heartbeat
+	heartbeatInterval := time.Duration(config.HeartbeatInterval) * time.Second
+	lastHeartbeat := time.Now()
+	updateCount := 0
+
 	// Periodic loop
 	ticker := time.NewTicker(time.Duration(config.UpdateInterval) * time.Second)
 	for range ticker.C {
 		if err := updateDNS(config); err != nil {
 			slog.Error("DNS update failed", "error", err)
+		} else {
+			updateCount++
+		}
+
+		if time.Since(lastHeartbeat) >= heartbeatInterval {
+			slog.Info("Heartbeat: service running", "successful_updates_since_last", updateCount)
+			lastHeartbeat = time.Now()
+			updateCount = 0
 		}
 	}
 }

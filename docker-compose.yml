@@ -8,5 +8,11 @@ services:
       - IONOS_DOMAINS=${IONOS_DOMAINS}
       - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS}
       - LOG_LEVEL=${LOG_LEVEL}
+      - HEARTBEAT_INTERVAL_SECONDS=${HEARTBEAT_INTERVAL_SECONDS:-21600}
     env_file:
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

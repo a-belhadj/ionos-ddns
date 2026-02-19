@@ -15,8 +15,8 @@ The service periodically sends POST requests to `https://api.hosting.ionos.com/d
 cp .env.example .env
 nano .env
 
-# Run with Docker Compose
-docker-compose up -d
+# Run with Podman Compose
+make up
 
 # Or run locally
 make run
@@ -31,6 +31,7 @@ IONOS_API_KEY=prefix_public.secret         # Required: Your IONOS API key
 IONOS_DOMAINS=example.com,sub.example.com  # Required: Domains to update
 UPDATE_INTERVAL_SECONDS=300                # Optional: Update interval in seconds (default: 300)
 LOG_LEVEL=INFO                             # Optional: DEBUG, INFO, WARN, ERROR (default: INFO)
+HEARTBEAT_INTERVAL_SECONDS=21600           # Optional: Heartbeat log interval in seconds (default: 21600 = 6h)
 ```
 
 ## Building
@@ -38,6 +39,10 @@ LOG_LEVEL=INFO                             # Optional: DEBUG, INFO, WARN, ERROR 
 ```bash
 make run      # Run locally
 make build    # Build binary
+make up       # Start with podman-compose
+make down     # Stop with podman-compose
+make status   # Show container status
+make logs     # Follow container logs
 ```
 
 ## API

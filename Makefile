@@ -1,4 +1,4 @@
-.PHONY: run build clean setup
+.PHONY: run build clean setup up down status logs
 
 setup:
 	go install golang.org/dl/go1.25.6@latest
@@ -12,3 +12,15 @@ build:
 
 clean:
 	rm -rf bin/
+
+up:
+	podman-compose up -d
+
+down:
+	podman-compose down
+
+status:
+	podman-compose ps
+
+logs:
+	podman-compose logs -f
