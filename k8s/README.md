@@ -37,6 +37,7 @@ Edit `k8s/configmap.yaml` to adjust settings:
 - `UPDATE_INTERVAL_SECONDS`: Update interval (default: 300)
 - `LOG_LEVEL`: Log level (DEBUG, INFO, WARN, ERROR)
 - `HEARTBEAT_INTERVAL_SECONDS`: Heartbeat log interval (default: 21600 = 6h)
+- `HEALTH_PORT`: Health check endpoint port (default: 8080)
 
 
 ## Uninstall

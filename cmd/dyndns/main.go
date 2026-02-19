@@ -120,12 +120,21 @@ func main() {
 		}
 	}
 
+	// Read health port (default: 8080)
+	healthPort := 8080
+	if envPort := os.Getenv("HEALTH_PORT"); envPort != "" {
+		if parsed, err := strconv.Atoi(envPort); err == nil {
+			healthPort = parsed
+		}
+	}
+
 	// Load config from environment
 	config := Config{
 		APIKey:            os.Getenv("IONOS_API_KEY"),
 		Domains:           strings.Split(os.Getenv("IONOS_DOMAINS"), ","),
 		UpdateInterval:    interval,
 		HeartbeatInterval: heartbeatSecs,
+		HealthPort:        healthPort,
 	}
 
 	// Check that API key is present
@@ -144,7 +153,21 @@ func main() {
 		"domains", config.Domains,
 		"update_interval_seconds", interval,
 		"heartbeat_interval_seconds", heartbeatSecs,
+		"health_port", healthPort,
 	)
+
+	// Start health check server
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "ok")
+	})
+	go func() {
+		addr := fmt.Sprintf(":%d", config.HealthPort)
+		slog.Info("Health check server starting", "addr", addr)
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			slog.Error("Health check server failed", "error", err)
+		}
+	}()
 
 	// First immediate update
 	if err := updateDNS(config); err != nil {

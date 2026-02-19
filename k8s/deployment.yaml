@@ -19,6 +19,21 @@ spec:
       - name: dyndns
         image: ghcr.io/a-belhadj/ionos-ddns:latest
         imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 3
+          periodSeconds: 10
         envFrom:
         - secretRef:
             name: ionos-dyndns-secret

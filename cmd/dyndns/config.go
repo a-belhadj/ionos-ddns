@@ -6,4 +6,5 @@ type Config struct {
 	Domains           []string // List of domains to update
 	UpdateInterval    int      // Interval in seconds between each update
 	HeartbeatInterval int      // Interval in seconds between heartbeat logs
+	HealthPort        int      // Port for the health check endpoint
 }

@@ -46,6 +46,7 @@ IONOS_DOMAINS=example.com,sub.example.com  # Required: Domains to update
 UPDATE_INTERVAL_SECONDS=300                # Optional: Update interval in seconds (default: 300)
 LOG_LEVEL=INFO                             # Optional: DEBUG, INFO, WARN, ERROR (default: INFO)
 HEARTBEAT_INTERVAL_SECONDS=21600           # Optional: Heartbeat log interval in seconds (default: 21600 = 6h)
+HEALTH_PORT=8080                          # Optional: Health check endpoint port (default: 8080)
 ```
 
 ## Building
