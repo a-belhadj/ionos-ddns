@@ -19,7 +19,13 @@ type DynDNSRequest struct {
 	Description string   `json:"description"`
 }
 
+const defaultAPIURL = "https://api.hosting.ionos.com/dns/v1/dyndns"
+
 func updateDNS(config Config) error {
+	return updateDNSWithURL(config, defaultAPIURL)
+}
+
+func updateDNSWithURL(config Config, apiURL string) error {
 	// Build the request body
 	reqBody := DynDNSRequest{
 		Domains:     config.Domains,
@@ -37,7 +43,7 @@ func updateDNS(config Config) error {
 	// Create HTTP request
 	req, err := http.NewRequest(
 		"POST",
-		"https://api.hosting.ionos.com/dns/v1/dyndns",
+		apiURL,
 		bytes.NewBuffer(jsonBody),
 	)
 	if err != nil {
