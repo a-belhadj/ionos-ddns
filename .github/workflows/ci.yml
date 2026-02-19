@@ -20,6 +20,8 @@ jobs:
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
+        with:
+          install-mode: goinstall
 
   test:
     runs-on: ubuntu-latest
