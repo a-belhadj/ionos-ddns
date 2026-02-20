@@ -1,4 +1,4 @@
-.PHONY: run build clean setup lint vuln test up down status logs
+.PHONY: run build clean setup lint vuln test up down status logs publish-doc
 
 setup:
 	go install golang.org/dl/go1.27.2@latest
@@ -46,3 +46,6 @@ status:
 
 logs:
 	podman-compose logs -f
+
+publish-doc:
+	cd docs && GIT_USER=a-belhadj npm run deploy
