@@ -35,5 +35,8 @@ go.work.sum
 # Compiled binary at repo root
 /dyndns
 
+# GoReleaser output
+dist/
+
 # Real Kubernetes secret (use k8s/secret.example.yaml as the template)
 k8s/secret.yaml
