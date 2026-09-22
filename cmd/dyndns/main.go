@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -107,6 +108,29 @@ func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
 	return nil
 }
 
+// healthMux builds the handler set exposed by the health check server.
+func healthMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "ok")
+	})
+	return mux
+}
+
+// newHealthServer returns a health check server with timeouts set on every
+// stage of the request lifecycle (gosec G114 / Slowloris).
+func newHealthServer(port int) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           healthMux(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
 func main() {
 	logLevel := setupLogger()
 	slog.Info("IONOS DynDNS starting", "log_level", logLevel.String())
@@ -129,15 +153,12 @@ func main() {
 		"health_port", config.HealthPort,
 	)
 
-	// Start health check server
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprint(w, "ok")
-	})
+	// Start health check server on a dedicated mux so that no package can
+	// register extra handlers (e.g. net/http/pprof) on this listener.
+	srv := newHealthServer(config.HealthPort)
 	go func() {
-		addr := fmt.Sprintf(":%d", config.HealthPort)
-		slog.Info("Health check server starting", "addr", addr)
-		if err := http.ListenAndServe(addr, nil); err != nil {
+		slog.Info("Health check server starting", "addr", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Health check server failed", "error", err)
 		}
 	}()

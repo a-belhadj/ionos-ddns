@@ -97,16 +97,16 @@ func TestUpdateDNSAPIError(t *testing.T) {
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprint(w, "ok")
-	})
-
-	server := httptest.NewServer(mux)
+	// Exercise the real handler set, not a copy of it.
+	server := httptest.NewServer(healthMux())
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/healthz")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/healthz", nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("failed to call /healthz: %v", err)
 	}
@@ -122,6 +122,43 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	if string(body) != "ok" {
 		t.Errorf("expected 'ok', got '%s'", string(body))
+	}
+}
+
+func TestHealthServerHasTimeouts(t *testing.T) {
+	srv := newHealthServer(8080)
+
+	if srv.Addr != ":8080" {
+		t.Errorf("expected addr :8080, got %s", srv.Addr)
+	}
+	if srv.ReadHeaderTimeout == 0 {
+		t.Error("ReadHeaderTimeout must be set to mitigate Slowloris")
+	}
+	if srv.ReadTimeout == 0 || srv.WriteTimeout == 0 || srv.IdleTimeout == 0 {
+		t.Error("read, write and idle timeouts must all be set")
+	}
+	if srv.Handler == nil {
+		t.Error("server must use a dedicated handler, not DefaultServeMux")
+	}
+}
+
+func TestHealthMuxRejectsUnknownPaths(t *testing.T) {
+	server := httptest.NewServer(healthMux())
+	defer server.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/debug/pprof/", nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for unregistered path, got %d", resp.StatusCode)
 	}
 }
 
