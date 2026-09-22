@@ -1,8 +1,8 @@
 .PHONY: run build clean setup lint test up down status logs
 
 setup:
-	go install golang.org/dl/go1.25.6@latest
-	go1.25.6 download
+	go install golang.org/dl/go1.25.14@latest
+	go1.25.14 download
 
 run:
 	export $$(cat .env | xargs) && go run ./cmd/dyndns
