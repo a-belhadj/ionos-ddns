@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+# Least privilege: these jobs only ever read the repository.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest

@@ -10,6 +10,10 @@ on:
     branches:
       - main
 
+# Least privilege by default; jobs opt into anything more.
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -21,6 +25,8 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      # Required for keyless cosign signing and build provenance.
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -69,6 +75,8 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
@@ -79,6 +87,18 @@ jobs:
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
           exit-code: '1'
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with cosign (keyless)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          # Sign the immutable digest once; every tag points at it.
+          cosign sign --yes "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
 
       - name: Upload Trivy results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
