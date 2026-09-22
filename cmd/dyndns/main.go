@@ -188,7 +188,7 @@ func run() error {
 	if config.APIKey == "" {
 		return errors.New("IONOS_API_KEY not defined")
 	}
-	if len(config.Domains) == 0 || config.Domains[0] == "" {
+	if len(config.Domains) == 0 {
 		return errors.New("IONOS_DOMAINS not defined")
 	}
 
