@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestDynDNSRequestJSON(t *testing.T) {
@@ -68,14 +72,14 @@ func TestUpdateDNSSuccess(t *testing.T) {
 		Domains: []string{"example.com"},
 	}
 
-	err := updateDNSWithURL(config, server.URL)
+	err := updateDNSWithURL(t.Context(), config, server.URL)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
 func TestUpdateDNSAPIError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = fmt.Fprint(w, `{"error":"unauthorized"}`)
 	}))
@@ -86,7 +90,7 @@ func TestUpdateDNSAPIError(t *testing.T) {
 		Domains: []string{"example.com"},
 	}
 
-	err := updateDNSWithURL(config, server.URL)
+	err := updateDNSWithURL(t.Context(), config, server.URL)
 	if err == nil {
 		t.Fatal("expected error for 401 response, got nil")
 	}
@@ -118,5 +122,65 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	if string(body) != "ok" {
 		t.Errorf("expected 'ok', got '%s'", string(body))
+	}
+}
+
+func TestUpdateDNSRespectsContextCancellation(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	config := Config{APIKey: "test-key", Domains: []string{"example.com"}}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := updateDNSWithURL(ctx, config, server.URL)
+	if err == nil {
+		t.Fatal("expected error when context deadline is exceeded, got nil")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("request was not cancelled promptly, took %v", elapsed)
+	}
+}
+
+func TestHTTPClientHasTimeout(t *testing.T) {
+	if httpClient.Timeout == 0 {
+		t.Error("shared HTTP client must define a timeout")
+	}
+}
+
+func TestTruncateBody(t *testing.T) {
+	short := []byte("ok")
+	if got := truncateBody(short); got != "ok" {
+		t.Errorf("expected short body unchanged, got %q", got)
+	}
+
+	long := bytes.Repeat([]byte("a"), maxLoggedBodyBytes*2)
+	got := truncateBody(long)
+	if len(got) >= len(long) {
+		t.Errorf("expected long body to be truncated, got %d bytes", len(got))
+	}
+	if !strings.HasSuffix(got, "...(truncated)") {
+		t.Error("expected truncation marker in output")
+	}
+}
+
+func TestUpdateDNSBoundsResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("a"), maxResponseBytes+4096))
+	}))
+	defer server.Close()
+
+	config := Config{APIKey: "test-key", Domains: []string{"example.com"}}
+
+	if err := updateDNSWithURL(t.Context(), config, server.URL); err != nil {
+		t.Fatalf("expected oversized body to be tolerated, got %v", err)
 	}
 }

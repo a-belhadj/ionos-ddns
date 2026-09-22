@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,11 +20,38 @@ type DynDNSRequest struct {
 
 const defaultAPIURL = "https://api.hosting.ionos.com/dns/v1/dyndns"
 
-func updateDNS(config Config) error {
-	return updateDNSWithURL(config, defaultAPIURL)
+const (
+	// requestTimeout bounds a single DNS update call so a stalled API cannot
+	// block the update loop forever.
+	requestTimeout = 30 * time.Second
+	// maxResponseBytes caps how much of the API response is read into memory.
+	maxResponseBytes = 1 << 20 // 1 MiB
+	// maxLoggedBodyBytes caps how much of the response body reaches the logs.
+	maxLoggedBodyBytes = 512
+)
+
+// httpClient is shared across updates so connections are reused and every
+// request inherits the same timeout and TLS floor.
+var httpClient = &http.Client{
+	Timeout: requestTimeout,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+	},
 }
 
-func updateDNSWithURL(config Config, apiURL string) error {
+// truncateBody shortens a response body for safe logging.
+func truncateBody(body []byte) string {
+	if len(body) > maxLoggedBodyBytes {
+		return string(body[:maxLoggedBodyBytes]) + "...(truncated)"
+	}
+	return string(body)
+}
+
+func updateDNS(ctx context.Context, config Config) error {
+	return updateDNSWithURL(ctx, config, defaultAPIURL)
+}
+
+func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
 	// Build the request body
 	reqBody := DynDNSRequest{
 		Domains:     config.Domains,
@@ -38,8 +67,9 @@ func updateDNSWithURL(config Config, apiURL string) error {
 	slog.Debug("Sending DNS update request", "domains", config.Domains)
 
 	// Create HTTP request
-	req, err := http.NewRequest(
-		"POST",
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
 		apiURL,
 		bytes.NewBuffer(jsonBody),
 	)
@@ -53,20 +83,19 @@ func updateDNSWithURL(config Config, apiURL string) error {
 	req.Header.Set("X-API-Key", config.APIKey)
 
 	// Send the request
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Read and display the response
-	body, err := io.ReadAll(resp.Body)
+	// Read and display the response, bounded to avoid unbounded allocation
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return err
 	}
 
-	slog.Debug("API response received", "status", resp.StatusCode, "body", string(body))
+	slog.Debug("API response received", "status", resp.StatusCode, "body", truncateBody(body))
 
 	// Check the status
 	if resp.StatusCode != http.StatusOK {
@@ -114,7 +143,7 @@ func main() {
 	}()
 
 	// First immediate update
-	if err := updateDNS(config); err != nil {
+	if err := updateDNS(context.Background(), config); err != nil {
 		slog.Error("DNS update failed", "error", err)
 	}
 
@@ -126,7 +155,7 @@ func main() {
 	// Periodic loop
 	ticker := time.NewTicker(time.Duration(config.UpdateInterval) * time.Second)
 	for range ticker.C {
-		if err := updateDNS(config); err != nil {
+		if err := updateDNS(context.Background(), config); err != nil {
 			slog.Error("DNS update failed", "error", err)
 		} else {
 			updateCount++
