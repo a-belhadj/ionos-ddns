@@ -27,6 +27,7 @@ The service runs as a lightweight container and periodically calls the IONOS Dyn
 ```bash
 # Configure
 cp .env.example .env
+chmod 600 .env   # the file holds your API key
 nano .env
 
 # Run with Podman Compose
@@ -54,11 +55,28 @@ HEALTH_PORT=8080                          # Optional: Health check endpoint port
 ```bash
 make run      # Run locally
 make build    # Build binary
+make test     # Run tests with the race detector
+make lint     # Run golangci-lint (gosec and friends)
+make vuln     # Run govulncheck
 make up       # Start with podman-compose
 make down     # Stop with podman-compose
 make status   # Show container status
 make logs     # Follow container logs
 ```
+
+## Security
+
+Published images are built with SBOM and provenance attestations, scanned with
+Trivy, and signed with cosign (keyless). Verify a pulled image with:
+
+```bash
+cosign verify ghcr.io/a-belhadj/ionos-ddns:latest \
+  --certificate-identity-regexp '^https://github.com/a-belhadj/ionos-ddns/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The container runs as an unprivileged user (uid 65534) on a `scratch` base with
+a read-only root filesystem and no capabilities.
 
 ## API
 

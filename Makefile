@@ -5,7 +5,10 @@ setup:
 	go1.25.14 download
 
 run:
-	export $$(cat .env | xargs) && go run ./cmd/dyndns
+	@# Previously `export $$(cat .env | xargs)`: xargs passes every value as
+	@# argv to a child process, exposing the API key in ps / /proc/<pid>/cmdline.
+	@# Sourcing keeps the values inside the shell.
+	set -a; . ./.env; set +a; go run ./cmd/dyndns
 
 build:
 	go build -o bin/dyndns ./cmd/dyndns
