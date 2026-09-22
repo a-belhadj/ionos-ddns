@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -219,5 +220,37 @@ func TestUpdateDNSBoundsResponseBody(t *testing.T) {
 
 	if err := updateDNSWithURL(t.Context(), config, server.URL); err != nil {
 		t.Fatalf("expected oversized body to be tolerated, got %v", err)
+	}
+}
+
+func TestRunLoopStopsOnContextCancellation(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := Config{
+		APIKey:            "test-key",
+		Domains:           []string{"example.com"},
+		UpdateInterval:    3600,
+		HeartbeatInterval: 3600,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runLoop(ctx, config, server.URL)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runLoop did not return after context cancellation")
 	}
 }

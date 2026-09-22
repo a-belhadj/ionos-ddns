@@ -10,6 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -46,10 +49,6 @@ func truncateBody(body []byte) string {
 		return string(body[:maxLoggedBodyBytes]) + "...(truncated)"
 	}
 	return string(body)
-}
-
-func updateDNS(ctx context.Context, config Config) error {
-	return updateDNSWithURL(ctx, config, defaultAPIURL)
 }
 
 func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
@@ -131,19 +130,66 @@ func newHealthServer(port int) *http.Server {
 	}
 }
 
-func main() {
+// shutdownTimeout bounds how long the health server gets to drain on exit.
+const shutdownTimeout = 5 * time.Second
+
+// runLoop performs the initial update then repeats it on every tick until the
+// context is cancelled.
+func runLoop(ctx context.Context, config Config, apiURL string) {
+	updateOnce := func() error {
+		reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+		defer cancel()
+		return updateDNSWithURL(reqCtx, config, apiURL)
+	}
+
+	// First immediate update
+	if err := updateOnce(); err != nil {
+		slog.Error("DNS update failed", "error", err)
+	}
+
+	// Heartbeat
+	heartbeatInterval := time.Duration(config.HeartbeatInterval) * time.Second
+	lastHeartbeat := time.Now()
+	updateCount := 0
+
+	// Periodic loop
+	ticker := time.NewTicker(time.Duration(config.UpdateInterval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Shutdown signal received, stopping update loop")
+			return
+		case <-ticker.C:
+			if err := updateOnce(); err != nil {
+				slog.Error("DNS update failed", "error", err)
+			} else {
+				updateCount++
+			}
+
+			if time.Since(lastHeartbeat) >= heartbeatInterval {
+				slog.Info("Heartbeat: service running", "successful_updates_since_last", updateCount)
+				lastHeartbeat = time.Now()
+				updateCount = 0
+			}
+		}
+	}
+}
+
+// run holds the application logic and reports failures to main, which owns the
+// process exit code.
+func run() error {
 	logLevel := setupLogger()
 	slog.Info("IONOS DynDNS starting", "log_level", logLevel.String())
 
 	config := loadConfig()
 
 	if config.APIKey == "" {
-		slog.Error("IONOS_API_KEY not defined")
-		return
+		return errors.New("IONOS_API_KEY not defined")
 	}
 	if len(config.Domains) == 0 || config.Domains[0] == "" {
-		slog.Error("IONOS_DOMAINS not defined")
-		return
+		return errors.New("IONOS_DOMAINS not defined")
 	}
 
 	slog.Info("Configuration loaded",
@@ -152,6 +198,10 @@ func main() {
 		"heartbeat_interval_seconds", config.HeartbeatInterval,
 		"health_port", config.HealthPort,
 	)
+
+	// Cancelled on SIGINT/SIGTERM so in-flight requests are aborted on exit.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// Start health check server on a dedicated mux so that no package can
 	// register extra handlers (e.g. net/http/pprof) on this listener.
@@ -163,29 +213,21 @@ func main() {
 		}
 	}()
 
-	// First immediate update
-	if err := updateDNS(context.Background(), config); err != nil {
-		slog.Error("DNS update failed", "error", err)
+	runLoop(ctx, config, defaultAPIURL)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Health check server shutdown failed", "error", err)
 	}
 
-	// Heartbeat
-	heartbeatInterval := time.Duration(config.HeartbeatInterval) * time.Second
-	lastHeartbeat := time.Now()
-	updateCount := 0
+	slog.Info("Shutdown complete")
+	return nil
+}
 
-	// Periodic loop
-	ticker := time.NewTicker(time.Duration(config.UpdateInterval) * time.Second)
-	for range ticker.C {
-		if err := updateDNS(context.Background(), config); err != nil {
-			slog.Error("DNS update failed", "error", err)
-		} else {
-			updateCount++
-		}
-
-		if time.Since(lastHeartbeat) >= heartbeatInterval {
-			slog.Info("Heartbeat: service running", "successful_updates_since_last", updateCount)
-			lastHeartbeat = time.Now()
-			updateCount = 0
-		}
+func main() {
+	if err := run(); err != nil {
+		slog.Error("Fatal error", "error", err)
+		os.Exit(1)
 	}
 }
