@@ -3,17 +3,19 @@ services:
     image: ghcr.io/a-belhadj/ionos-ddns:latest
     container_name: ionos-dyndns
     restart: unless-stopped
-    environment:
-      - IONOS_API_KEY=${IONOS_API_KEY}
-      - IONOS_DOMAINS=${IONOS_DOMAINS}
-      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - HEARTBEAT_INTERVAL_SECONDS=${HEARTBEAT_INTERVAL_SECONDS:-21600}
-      - HEALTH_PORT=${HEALTH_PORT:-8080}
-    ports:
-      - "${HEALTH_PORT:-8080}:${HEALTH_PORT:-8080}"
+    # Values come from .env; no duplicate `environment:` block so there is a
+    # single, unambiguous source of configuration.
     env_file:
       - .env
+    # Health endpoint stays on the loopback interface, not on every NIC.
+    ports:
+      - "127.0.0.1:${HEALTH_PORT:-8080}:${HEALTH_PORT:-8080}"
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
