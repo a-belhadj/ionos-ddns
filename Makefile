@@ -1,4 +1,4 @@
-.PHONY: run build clean setup lint test up down status logs
+.PHONY: run build clean setup lint vuln test up down status logs
 
 setup:
 	go install golang.org/dl/go1.25.14@latest
@@ -20,6 +20,14 @@ lint:
 		exit 1; \
 	}
 	golangci-lint run ./...
+
+vuln:
+	@command -v govulncheck >/dev/null 2>&1 || { \
+		echo "govulncheck not found. Install it with:"; \
+		echo "  go install golang.org/x/vuln/cmd/govulncheck@latest"; \
+		exit 1; \
+	}
+	govulncheck ./...
 
 test:
 	go test -v -race ./...
