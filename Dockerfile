@@ -1,5 +1,5 @@
 # Build stage
-FROM docker.io/library/golang:1.25-alpine AS builder
+FROM docker.io/library/golang:1.27-alpine AS builder
 
 ENV GOFLAGS=-mod=readonly
 
