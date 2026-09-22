@@ -5,6 +5,11 @@ builds:
     binary: dyndns
     env:
       - CGO_ENABLED=0
+    # Strip local paths so release binaries are reproducible.
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
     goos:
       - linux
       - darwin
@@ -13,8 +18,14 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  - formats: ["tar.gz"]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+sboms:
+  - artifacts: archive
+
+checksum:
+  name_template: "checksums.txt"
 
 changelog:
   sort: asc

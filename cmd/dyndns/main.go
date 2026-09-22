@@ -2,11 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -18,11 +24,34 @@ type DynDNSRequest struct {
 
 const defaultAPIURL = "https://api.hosting.ionos.com/dns/v1/dyndns"
 
-func updateDNS(config Config) error {
-	return updateDNSWithURL(config, defaultAPIURL)
+const (
+	// requestTimeout bounds a single DNS update call so a stalled API cannot
+	// block the update loop forever.
+	requestTimeout = 30 * time.Second
+	// maxResponseBytes caps how much of the API response is read into memory.
+	maxResponseBytes = 1 << 20 // 1 MiB
+	// maxLoggedBodyBytes caps how much of the response body reaches the logs.
+	maxLoggedBodyBytes = 512
+)
+
+// httpClient is shared across updates so connections are reused and every
+// request inherits the same timeout and TLS floor.
+var httpClient = &http.Client{
+	Timeout: requestTimeout,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+	},
 }
 
-func updateDNSWithURL(config Config, apiURL string) error {
+// truncateBody shortens a response body for safe logging.
+func truncateBody(body []byte) string {
+	if len(body) > maxLoggedBodyBytes {
+		return string(body[:maxLoggedBodyBytes]) + "...(truncated)"
+	}
+	return string(body)
+}
+
+func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
 	// Build the request body
 	reqBody := DynDNSRequest{
 		Domains:     config.Domains,
@@ -38,8 +67,9 @@ func updateDNSWithURL(config Config, apiURL string) error {
 	slog.Debug("Sending DNS update request", "domains", config.Domains)
 
 	// Create HTTP request
-	req, err := http.NewRequest(
-		"POST",
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
 		apiURL,
 		bytes.NewBuffer(jsonBody),
 	)
@@ -53,20 +83,19 @@ func updateDNSWithURL(config Config, apiURL string) error {
 	req.Header.Set("X-API-Key", config.APIKey)
 
 	// Send the request
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Read and display the response
-	body, err := io.ReadAll(resp.Body)
+	// Read and display the response, bounded to avoid unbounded allocation
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return err
 	}
 
-	slog.Debug("API response received", "status", resp.StatusCode, "body", string(body))
+	slog.Debug("API response received", "status", resp.StatusCode, "body", truncateBody(body))
 
 	// Check the status
 	if resp.StatusCode != http.StatusOK {
@@ -78,43 +107,43 @@ func updateDNSWithURL(config Config, apiURL string) error {
 	return nil
 }
 
-func main() {
-	logLevel := setupLogger()
-	slog.Info("IONOS DynDNS starting", "log_level", logLevel.String())
-
-	config := loadConfig()
-
-	if config.APIKey == "" {
-		slog.Error("IONOS_API_KEY not defined")
-		return
-	}
-	if len(config.Domains) == 0 || config.Domains[0] == "" {
-		slog.Error("IONOS_DOMAINS not defined")
-		return
-	}
-
-	slog.Info("Configuration loaded",
-		"domains", config.Domains,
-		"update_interval_seconds", config.UpdateInterval,
-		"heartbeat_interval_seconds", config.HeartbeatInterval,
-		"health_port", config.HealthPort,
-	)
-
-	// Start health check server
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+// healthMux builds the handler set exposed by the health check server.
+func healthMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, "ok")
 	})
-	go func() {
-		addr := fmt.Sprintf(":%d", config.HealthPort)
-		slog.Info("Health check server starting", "addr", addr)
-		if err := http.ListenAndServe(addr, nil); err != nil {
-			slog.Error("Health check server failed", "error", err)
-		}
-	}()
+	return mux
+}
+
+// newHealthServer returns a health check server with timeouts set on every
+// stage of the request lifecycle (gosec G114 / Slowloris).
+func newHealthServer(port int) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           healthMux(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
+// shutdownTimeout bounds how long the health server gets to drain on exit.
+const shutdownTimeout = 5 * time.Second
+
+// runLoop performs the initial update then repeats it on every tick until the
+// context is cancelled.
+func runLoop(ctx context.Context, config Config, apiURL string) {
+	updateOnce := func() error {
+		reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+		defer cancel()
+		return updateDNSWithURL(reqCtx, config, apiURL)
+	}
 
 	// First immediate update
-	if err := updateDNS(config); err != nil {
+	if err := updateOnce(); err != nil {
 		slog.Error("DNS update failed", "error", err)
 	}
 
@@ -125,17 +154,80 @@ func main() {
 
 	// Periodic loop
 	ticker := time.NewTicker(time.Duration(config.UpdateInterval) * time.Second)
-	for range ticker.C {
-		if err := updateDNS(config); err != nil {
-			slog.Error("DNS update failed", "error", err)
-		} else {
-			updateCount++
-		}
+	defer ticker.Stop()
 
-		if time.Since(lastHeartbeat) >= heartbeatInterval {
-			slog.Info("Heartbeat: service running", "successful_updates_since_last", updateCount)
-			lastHeartbeat = time.Now()
-			updateCount = 0
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("Shutdown signal received, stopping update loop")
+			return
+		case <-ticker.C:
+			if err := updateOnce(); err != nil {
+				slog.Error("DNS update failed", "error", err)
+			} else {
+				updateCount++
+			}
+
+			if time.Since(lastHeartbeat) >= heartbeatInterval {
+				slog.Info("Heartbeat: service running", "successful_updates_since_last", updateCount)
+				lastHeartbeat = time.Now()
+				updateCount = 0
+			}
 		}
+	}
+}
+
+// run holds the application logic and reports failures to main, which owns the
+// process exit code.
+func run() error {
+	logLevel := setupLogger()
+	slog.Info("IONOS DynDNS starting", "log_level", logLevel.String())
+
+	config := loadConfig()
+
+	if config.APIKey == "" {
+		return errors.New("IONOS_API_KEY not defined")
+	}
+	if len(config.Domains) == 0 {
+		return errors.New("IONOS_DOMAINS not defined")
+	}
+
+	slog.Info("Configuration loaded",
+		"domains", config.Domains,
+		"update_interval_seconds", config.UpdateInterval,
+		"heartbeat_interval_seconds", config.HeartbeatInterval,
+		"health_port", config.HealthPort,
+	)
+
+	// Cancelled on SIGINT/SIGTERM so in-flight requests are aborted on exit.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Start health check server on a dedicated mux so that no package can
+	// register extra handlers (e.g. net/http/pprof) on this listener.
+	srv := newHealthServer(config.HealthPort)
+	go func() {
+		slog.Info("Health check server starting", "addr", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Health check server failed", "error", err)
+		}
+	}()
+
+	runLoop(ctx, config, defaultAPIURL)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Health check server shutdown failed", "error", err)
+	}
+
+	slog.Info("Shutdown complete")
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		slog.Error("Fatal error", "error", err)
+		os.Exit(1)
 	}
 }

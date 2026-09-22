@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+# Least privilege: these jobs only ever read the repository.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -22,6 +26,9 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           install-mode: goinstall
+          # Pinned: `latest` makes CI non-reproducible and can silently
+          # require a newer Go toolchain than go.mod allows.
+          version: v2.13.2
 
   test:
     runs-on: ubuntu-latest
@@ -34,3 +41,35 @@ jobs:
 
       - name: Run tests
         run: go test -v -race ./...
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # Reports only vulnerabilities actually reachable from this code,
+      # including Go standard library ones.
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          govulncheck ./...
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # Catches deprecated or invalid release config before tagging.
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: check

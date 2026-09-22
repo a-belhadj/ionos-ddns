@@ -15,6 +15,11 @@ spec:
       labels:
         app: ionos-dyndns
     spec:
+      # No Kubernetes API access is needed by this workload.
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: dyndns
         image: ghcr.io/a-belhadj/ionos-ddns:latest

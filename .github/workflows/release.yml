@@ -20,8 +20,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # GoReleaser shells out to syft to build the archive SBOMs.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
           args: release --clean

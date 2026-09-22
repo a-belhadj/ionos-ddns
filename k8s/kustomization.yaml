@@ -5,9 +5,14 @@ namespace: ionos-ddns
 
 resources:
   - namespace.yaml
+  # Not tracked in git: create it from secret.example.yaml, or supply the
+  # Secret through Sealed Secrets / External Secrets instead.
   - secret.yaml
   - configmap.yaml
   - deployment.yaml
+  # Requires a CNI plugin that enforces NetworkPolicy (Cilium, Calico, ...).
+  # Uncomment once you have confirmed your cluster supports it.
+  # - networkpolicy.yaml
 
 labels:
   - pairs:
