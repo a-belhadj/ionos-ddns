@@ -1,0 +1,42 @@
+# Restricts the updater to exactly what it needs: DNS resolution and outbound
+# HTTPS to the IONOS API, plus inbound health probes.
+#
+# NOTE: NetworkPolicy is enforced only by a CNI plugin that supports it
+# (Cilium, Calico, Weave, ...). With a plain Flannel install it is silently
+# ignored. Enable it in kustomization.yaml once you have confirmed support.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ionos-dyndns
+  namespace: ionos-ddns
+spec:
+  podSelector:
+    matchLabels:
+      app: ionos-dyndns
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Health probes come from the kubelet on the node, which is not covered by
+    # namespace selectors; allow the port from anywhere in the cluster network.
+    - ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Cluster DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to the IONOS API
+    - ports:
+        - protocol: TCP
+          port: 443
