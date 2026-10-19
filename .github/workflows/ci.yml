@@ -32,7 +32,7 @@ jobs:
           install-mode: goinstall
           # Pinned: `latest` makes CI non-reproducible and can silently
           # require a newer Go toolchain than go.mod allows.
-          version: v2.13.2
+          version: v2.15.0
 
   test:
     runs-on: ubuntu-latest
