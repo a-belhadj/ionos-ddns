@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/a-belhadj/ionos-ddns/actions/workflows/ci.yml/badge.svg)](https://github.com/a-belhadj/ionos-ddns/actions/workflows/ci.yml)
 [![Build and Push Docker Image](https://github.com/a-belhadj/ionos-ddns/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/a-belhadj/ionos-ddns/actions/workflows/docker-publish.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/a-belhadj/ionos-ddns)](https://goreportcard.com/report/github.com/a-belhadj/ionos-ddns)
+[![Lint](https://github.com/a-belhadj/ionos-ddns/actions/workflows/lint.yml/badge.svg)](https://golangci-lint.run/)
 [![Docker Image](https://ghcr-badge.egpl.dev/a-belhadj/ionos-ddns/latest_tag?trim=major&label=latest)](https://github.com/a-belhadj/ionos-ddns/pkgs/container/ionos-ddns)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
