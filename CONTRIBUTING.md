@@ -38,7 +38,7 @@ make build
 `make lint` and `make vuln` need tooling that is not vendored:
 
 ```bash
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 ```
 
