@@ -7,6 +7,10 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+  schedule:
+    # Weekly: govulncheck against the latest vuln DB, even without a commit.
+    - cron: "0 4 * * 1"
 
 # Least privilege: these jobs only ever read the repository.
 permissions:
