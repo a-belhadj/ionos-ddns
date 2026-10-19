@@ -42,7 +42,7 @@ make run
 Configure via `.env` file:
 
 ```bash
-IONOS_API_KEY=prefix_public.secret         # Required: Your IONOS API key
+IONOS_API_KEY=3f2a9c1b7d4e48a6b5c0d9e8f7a61234.Qm9xV2tYcEw3ZGhOa1JzTHpBdUZqQ0VpU0hnb1BuMTIzNDU2Nzg5MGFiY2RlZg         # Required: Your IONOS API key
 IONOS_DOMAINS=example.com,sub.example.com  # Required: Domains to update
 UPDATE_INTERVAL_SECONDS=300                # Optional: Update interval in seconds (default: 300)
 LOG_LEVEL=INFO                             # Optional: DEBUG, INFO, WARN, ERROR (default: INFO)
