@@ -1,8 +1,8 @@
 .PHONY: run build clean setup lint vuln test up down status logs publish-doc
 
 setup:
-	go install golang.org/dl/go1.27.2@latest
-	go1.27.2 download
+	go install golang.org/dl/go1.27.3@latest
+	go1.27.3 download
 
 run:
 	@# Previously `export $$(cat .env | xargs)`: xargs passes every value as
