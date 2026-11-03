@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -51,7 +52,26 @@ func truncateBody(body []byte) string {
 	return string(body)
 }
 
-func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
+// DynDNSResponse is returned by the IONOS DynDNS registration endpoint.
+// Registering does not change any record: the IP is only updated when
+// UpdateURL is called, IONOS using the caller's source address.
+type DynDNSResponse struct {
+	BulkID    string `json:"bulkId"`
+	UpdateURL string `json:"updateUrl"`
+}
+
+// apiStatusError reports a non-200 answer from the IONOS API.
+type apiStatusError struct {
+	status int
+}
+
+func (e *apiStatusError) Error() string {
+	return fmt.Sprintf("IONOS API error: status %d", e.status)
+}
+
+// registerDynDNS registers the domains with IONOS and returns the update URL
+// to call to push the current public IP.
+func registerDynDNS(ctx context.Context, config Config, apiURL string) (string, error) {
 	// Build the request body
 	reqBody := DynDNSRequest{
 		Domains:     config.Domains,
@@ -61,10 +81,10 @@ func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
 	// Convert to JSON
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	slog.Debug("Sending DNS update request", "domains", config.Domains)
+	slog.Debug("Sending DynDNS registration request", "domains", config.Domains)
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(
@@ -74,7 +94,7 @@ func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
 		bytes.NewBuffer(jsonBody),
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Add headers
@@ -85,26 +105,84 @@ func updateDNSWithURL(ctx context.Context, config Config, apiURL string) error {
 	// Send the request
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Read and display the response, bounded to avoid unbounded allocation
+	// Read the response, bounded to avoid unbounded allocation
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return "", err
+	}
+
+	// A successful body holds the secret update URL, so only its status is logged.
+	slog.Debug("Registration response received", "status", resp.StatusCode)
+
+	// Check the status
+	if resp.StatusCode != http.StatusOK {
+		slog.Debug("Registration error body", "body", truncateBody(body))
+		return "", &apiStatusError{status: resp.StatusCode}
+	}
+
+	var parsed DynDNSResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("invalid registration response: %w", err)
+	}
+	if parsed.UpdateURL == "" {
+		return "", errors.New("registration response has no updateUrl")
+	}
+
+	slog.Debug("DynDNS registered", "bulk_id", parsed.BulkID)
+
+	return parsed.UpdateURL, nil
+}
+
+// triggerUpdate calls the update URL so IONOS sets the records to the public
+// IP the request comes from. The URL embeds a secret token and must never end
+// up in logs or error messages.
+func triggerUpdate(ctx context.Context, updateURL string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateURL, nil)
+	if err != nil {
+		return errors.New("invalid update URL")
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		// *url.Error embeds the full URL, token included: keep only the cause.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return fmt.Errorf("update request failed: %w", urlErr.Err)
+		}
+		return errors.New("update request failed")
+	}
+	defer func() { _ = resp.Body.Close() }()
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return err
 	}
 
-	slog.Debug("API response received", "status", resp.StatusCode, "body", truncateBody(body))
+	slog.Debug("Update response received", "status", resp.StatusCode, "body", truncateBody(body))
 
-	// Check the status
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("IONOS API error: status %d", resp.StatusCode)
+		return &apiStatusError{status: resp.StatusCode}
 	}
 
-	slog.Debug("DNS updated successfully", "domains", config.Domains, "status", resp.StatusCode)
-
 	return nil
+}
+
+// isStaleUpdateURL reports whether an update failure means the update URL is
+// no longer valid and a new registration is needed.
+func isStaleUpdateURL(err error) bool {
+	var statusErr *apiStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	switch statusErr.status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return true
+	}
+	return false
 }
 
 // healthMux builds the handler set exposed by the health check server.
@@ -133,19 +211,65 @@ func newHealthServer(port int) *http.Server {
 // shutdownTimeout bounds how long the health server gets to drain on exit.
 const shutdownTimeout = 5 * time.Second
 
+// dnsUpdater keeps the state shared between successive updates.
+type dnsUpdater struct {
+	config Config
+	apiURL string
+	// updateURL is reused across ticks so a new IONOS bulk is not created on
+	// every interval.
+	updateURL string
+	// lastOK makes successes log at INFO only after startup or a failure, so
+	// the logs show the service works without one line per interval.
+	lastOK bool
+}
+
+// update registers with IONOS if needed, then pushes the current public IP.
+func (u *dnsUpdater) update(ctx context.Context) error {
+	if u.updateURL == "" {
+		regCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+		updateURL, err := registerDynDNS(regCtx, u.config, u.apiURL)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("registration: %w", err)
+		}
+		u.updateURL = updateURL
+	}
+
+	updCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	if err := triggerUpdate(updCtx, u.updateURL); err != nil {
+		if isStaleUpdateURL(err) {
+			u.updateURL = ""
+		}
+		return fmt.Errorf("update: %w", err)
+	}
+	return nil
+}
+
+// updateAndLog runs an update and logs its outcome.
+func (u *dnsUpdater) updateAndLog(ctx context.Context) error {
+	err := u.update(ctx)
+	if err != nil {
+		slog.Error("DNS update failed", "error", err)
+		u.lastOK = false
+		return err
+	}
+	if !u.lastOK {
+		slog.Info("DNS updated with current public IP", "domains", u.config.Domains)
+	} else {
+		slog.Debug("DNS updated with current public IP", "domains", u.config.Domains)
+	}
+	u.lastOK = true
+	return nil
+}
+
 // runLoop performs the initial update then repeats it on every tick until the
 // context is cancelled.
 func runLoop(ctx context.Context, config Config, apiURL string) {
-	updateOnce := func() error {
-		reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
-		defer cancel()
-		return updateDNSWithURL(reqCtx, config, apiURL)
-	}
+	updater := &dnsUpdater{config: config, apiURL: apiURL}
 
 	// First immediate update
-	if err := updateOnce(); err != nil {
-		slog.Error("DNS update failed", "error", err)
-	}
+	_ = updater.updateAndLog(ctx)
 
 	// Heartbeat
 	heartbeatInterval := time.Duration(config.HeartbeatInterval) * time.Second
@@ -162,9 +286,7 @@ func runLoop(ctx context.Context, config Config, apiURL string) {
 			slog.Info("Shutdown signal received, stopping update loop")
 			return
 		case <-ticker.C:
-			if err := updateOnce(); err != nil {
-				slog.Error("DNS update failed", "error", err)
-			} else {
+			if err := updater.updateAndLog(ctx); err == nil {
 				updateCount++
 			}
 
