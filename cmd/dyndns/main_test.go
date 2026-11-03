@@ -63,7 +63,7 @@ func TestUpdateDNSSuccess(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprint(w, `{"status":"ok"}`)
+		_, _ = fmt.Fprint(w, `{"bulkId":"b1","updateUrl":"https://ipv4.example.test/dyndns?q=secret"}`)
 	}))
 	defer server.Close()
 
@@ -73,9 +73,129 @@ func TestUpdateDNSSuccess(t *testing.T) {
 		Domains: []string{"example.com"},
 	}
 
-	err := updateDNSWithURL(t.Context(), config, server.URL)
+	updateURL, err := registerDynDNS(t.Context(), config, server.URL)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+	if updateURL != "https://ipv4.example.test/dyndns?q=secret" {
+		t.Errorf("unexpected update URL: %q", updateURL)
+	}
+}
+
+func TestRegisterDynDNSMissingUpdateURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"bulkId":"b1"}`)
+	}))
+	defer server.Close()
+
+	config := Config{APIKey: "test-key", Domains: []string{"example.com"}}
+
+	if _, err := registerDynDNS(t.Context(), config, server.URL); err == nil {
+		t.Fatal("expected error when updateUrl is missing, got nil")
+	}
+}
+
+// fakeIONOS serves the registration endpoint on / and the update URL on
+// /update, counting calls to each and answering updates with updateStatus.
+type fakeIONOS struct {
+	server        *httptest.Server
+	registrations atomic.Int32
+	updates       atomic.Int32
+	updateStatus  atomic.Int32
+}
+
+func newFakeIONOS(t *testing.T) *fakeIONOS {
+	t.Helper()
+	f := &fakeIONOS{}
+	f.updateStatus.Store(http.StatusOK)
+	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/":
+			f.registrations.Add(1)
+			_, _ = fmt.Fprintf(w, `{"bulkId":"b1","updateUrl":"%s/update?q=secret"}`, f.server.URL)
+		case r.Method == http.MethodGet && r.URL.Path == "/update":
+			if r.URL.Query().Get("q") != "secret" {
+				t.Errorf("update URL token not forwarded, got %q", r.URL.RawQuery)
+			}
+			f.updates.Add(1)
+			w.WriteHeader(int(f.updateStatus.Load()))
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(f.server.Close)
+	return f
+}
+
+func TestUpdaterRegistersOnceAndTriggersEveryTime(t *testing.T) {
+	f := newFakeIONOS(t)
+	u := &dnsUpdater{
+		config: Config{APIKey: "test-key", Domains: []string{"example.com"}},
+		apiURL: f.server.URL,
+	}
+
+	for i := range 3 {
+		if err := u.update(t.Context()); err != nil {
+			t.Fatalf("update %d failed: %v", i, err)
+		}
+	}
+
+	if got := f.registrations.Load(); got != 1 {
+		t.Errorf("expected 1 registration, got %d", got)
+	}
+	if got := f.updates.Load(); got != 3 {
+		t.Errorf("expected 3 update calls, got %d", got)
+	}
+}
+
+func TestUpdaterReportsUpdateFailure(t *testing.T) {
+	f := newFakeIONOS(t)
+	f.updateStatus.Store(http.StatusInternalServerError)
+	u := &dnsUpdater{
+		config: Config{APIKey: "test-key", Domains: []string{"example.com"}},
+		apiURL: f.server.URL,
+	}
+
+	if err := u.update(t.Context()); err == nil {
+		t.Fatal("expected error for 500 update response, got nil")
+	}
+	// A server error is transient: the update URL is kept.
+	if u.updateURL == "" {
+		t.Error("update URL should be kept after a transient failure")
+	}
+}
+
+func TestUpdaterReregistersAfterRejectedUpdateURL(t *testing.T) {
+	f := newFakeIONOS(t)
+	f.updateStatus.Store(http.StatusUnauthorized)
+	u := &dnsUpdater{
+		config: Config{APIKey: "test-key", Domains: []string{"example.com"}},
+		apiURL: f.server.URL,
+	}
+
+	if err := u.update(t.Context()); err == nil {
+		t.Fatal("expected error for 401 update response, got nil")
+	}
+
+	f.updateStatus.Store(http.StatusOK)
+	if err := u.update(t.Context()); err != nil {
+		t.Fatalf("expected recovery after re-registration, got %v", err)
+	}
+	if got := f.registrations.Load(); got != 2 {
+		t.Errorf("expected 2 registrations, got %d", got)
+	}
+}
+
+func TestTriggerUpdateErrorHidesToken(t *testing.T) {
+	// Nothing listens on this port, so the request fails at connection time.
+	err := triggerUpdate(t.Context(), "http://127.0.0.1:1/update?q=supersecret")
+	if err == nil {
+		t.Fatal("expected connection error, got nil")
+	}
+	if strings.Contains(err.Error(), "supersecret") {
+		t.Errorf("error leaks the update token: %v", err)
 	}
 }
 
@@ -91,7 +211,7 @@ func TestUpdateDNSAPIError(t *testing.T) {
 		Domains: []string{"example.com"},
 	}
 
-	err := updateDNSWithURL(t.Context(), config, server.URL)
+	_, err := registerDynDNS(t.Context(), config, server.URL)
 	if err == nil {
 		t.Fatal("expected error for 401 response, got nil")
 	}
@@ -178,7 +298,7 @@ func TestUpdateDNSRespectsContextCancellation(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := updateDNSWithURL(ctx, config, server.URL)
+	_, err := registerDynDNS(ctx, config, server.URL)
 	if err == nil {
 		t.Fatal("expected error when context deadline is exceeded, got nil")
 	}
@@ -216,9 +336,7 @@ func TestUpdateDNSBoundsResponseBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := Config{APIKey: "test-key", Domains: []string{"example.com"}}
-
-	if err := updateDNSWithURL(t.Context(), config, server.URL); err != nil {
+	if err := triggerUpdate(t.Context(), server.URL); err != nil {
 		t.Fatalf("expected oversized body to be tolerated, got %v", err)
 	}
 }
